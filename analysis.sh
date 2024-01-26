@@ -1,20 +1,20 @@
 #!/bin/bash
-do_initialisation=true
+do_initialisation=false
 initialisation_events=100000
 
-do_alignment=true
-ALIGNMENT_MODULE="AlignmentMillepede" # AlignmentMillepede or AlignmentTrackChi2
-alignment_events=100000
+do_alignment=false
+ALIGNMENT_MODULE="AlignmentTrackChi2" # AlignmentMillepede or AlignmentTrackChi2
+alignment_events=10000
 alignment_iterations=5
 
 do_tracking=true
-TRACKING_MODULE="Tracking4D" # Tracking4D or TrackingMultiplet
+TRACKING_MODULE="TrackingMultiplet" # Tracking4D or TrackingMultiplet
 TRACK_MODEL="gbl" # straightLine or gbl
-TRACKING_GEOMETRY_FILE="/home/alpide/Simon/marburg/initial_telescope_geometry.geo"
-tracking_events=3000000
+TRACKING_GEOMETRY_FILE="/home/alpide/Simon/marburg/output/AlignmentTrackChi2_Tracking4D_gbl_TEST_2501-target_out/2-AlignmentTrackChi2_Tracking4D_gbl_TEST_2501-target_out_aligned.geo"
+tracking_events=100000000
 tracking_analysebunch_size=500000
 
-do_dutanalysis=true
+do_dutanalysis=false
 dutanalysis_events=500000
 
 
@@ -22,8 +22,8 @@ dutanalysis_events=500000
 target_out=true
 MIN_HITS_ON_TRACK=6
 DETECTORS=("ALPIDE_0" "ALPIDE_1" "ALPIDE_2" "ALPIDE_3" "ALPIDE_4" "ALPIDE_5")
-UPSTREAM_DETECTORS="ALPIDE_0" "ALPIDE_1" "ALPIDE_2"
-DOWNSTREAM_DETECTORS="ALPIDE_3" "ALPIDE_4" "ALPIDE_5"
+UPSTREAM_DETECTORS="\"ALPIDE_0\" \"ALPIDE_1\" \"ALPIDE_2\""
+DOWNSTREAM_DETECTORS="\"ALPIDE_3\" \"ALPIDE_4\" \"ALPIDE_5\""
 
 OUTPUT_DIR=/home/alpide/Simon/marburg/output
 
@@ -33,7 +33,7 @@ DATA_PATH="/media/alpide/ALPIDE_data/marburg"
 dataset_number=0
 
 get_data_files() {
-    OUTPUT_NAME="${ALIGNMENT_MODULE}_${TRACKING_MODULE}_${TRACK_MODEL}_TEST_2501"
+    OUTPUT_NAME="${ALIGNMENT_MODULE}_${TRACKING_MODULE}_${TRACK_MODEL}_2601"
 
     if [ $target_out = true ]; then
         # TARGET OUT
@@ -93,6 +93,7 @@ create_tracking_conf() {
     do
         sed -n '/'"$module"'\]/,/\[/p' /home/alpide/Simon/marburg/module_templates.conf | sed '$d' >> ${OUTPUT_CONF}
     done
+    sed -i '/GEOMETRY_FILE_UPDATED/d' ${OUTPUT_CONF}
 }
 
 create_dut_conf() {
@@ -102,6 +103,7 @@ create_dut_conf() {
     do
         sed -n '/'"$module"'\]/,/\[/p' /home/alpide/Simon/marburg/module_templates.conf | sed '$d' >> ${OUTPUT_CONF}
     done
+    sed -i '/GEOMETRY_FILE_UPDATED/d' ${OUTPUT_CONF}
 }
 
 
@@ -134,8 +136,8 @@ exchange_placeholders() {
 }
 
 execute() {
-    # ./../../corryvreckan/bin/corry -c "$OUTPUT_CONF"
-    echo "${OUTPUT_CONF}"
+    ./../../corryvreckan/bin/corry -c "$OUTPUT_CONF" >> "${OUTPUT_DIR}/log.txt" 2>&1
+    # echo "${OUTPUT_CONF}" #>> "${OUTPUT_DIR}/log.txt" 2>&1
 }
 
 # ############################################################### #
@@ -148,10 +150,18 @@ execute() {
 get_data_files
 OUTPUT_DIR="$OUTPUT_DIR/$OUTPUT_NAME"
 mkdir -p "$OUTPUT_DIR"
+echo "" > "${OUTPUT_DIR}/log.txt" 2>&1
 
 # ############################################## INITIALISATION ############################################## #
 if [ "$do_initialisation" = true ] ; then
-    GEOMETRY_FILE="${INITIAL_GEOMETRY_FILE}"
+    echo -en "Initialisation ..."
+    TEMP_GEO="${OUTPUT_DIR}/0-${OUTPUT_NAME}_prealigned.geo"
+    echo "" > ${TEMP_GEO}
+    for ((detector_n=0; detector_n<${#DETECTORS[@]}; detector_n++)); do
+        module="ALPIDE_$detector_n"
+        sed -n '/'"$module"'\]/,/\[/p' "/home/alpide/Simon/marburg/geometry_templates.geo" | sed '$d' >> ${TEMP_GEO}
+    done
+    GEOMETRY_FILE="${TEMP_GEO}"
     FILE_NAME="0-${OUTPUT_NAME}_prealigned"
     OUTPUT_CONF="${OUTPUT_DIR}/${FILE_NAME}.conf"
     GEOMETRY_FILE_UPDATED="$OUTPUT_DIR/${FILE_NAME}.geo"
@@ -162,10 +172,12 @@ if [ "$do_initialisation" = true ] ; then
     create_init_conf
     exchange_placeholders
     execute
+    echo -en "\rInitialisation Done!\n"
 fi
 # ############################################## ALIGNMENT ############################################## #
 if [ "$do_alignment" = true ] ; then
     for ((iteration=1; iteration<=$alignment_iterations; iteration++)); do
+        echo -en "\rAlignment Iteration $iteration/$alignment_iterations ..."
         GEOMETRY_FILE="$OUTPUT_DIR/0-${OUTPUT_NAME}_prealigned.geo"
         FILE_NAME="2-${OUTPUT_NAME}_aligned"
         if [ $iteration -gt 1 ]; then
@@ -184,6 +196,7 @@ if [ "$do_alignment" = true ] ; then
         exchange_placeholders
         execute
     done    
+    echo -en "\rAlignment ($alignment_iterations Iterations) Done!\n"
 
 fi
 # ############################################## TRACKING ############################################## #
@@ -192,6 +205,8 @@ if [ "$do_tracking" = true ] ; then
         GEOMETRY_FILE="$OUTPUT_DIR/2-${OUTPUT_NAME}_aligned.geo"
     elif [ "$do_alignment" = false ] && [ "$do_initialisation" = false ] ; then
         GEOMETRY_FILE="$TRACKING_GEOMETRY_FILE"  # ADD OWN ALIGNED GEOMETRY FILE
+        echo "Using own aligned geometry file: $GEOMETRY_FILE"
+        echo "Using own aligned geometry file: $GEOMETRY_FILE" >> "${OUTPUT_DIR}/log.txt"
     else
         echo "No alignment done --> using initial geometry file"
         GEOMETRY_FILE="$INITIAL_GEOMETRY_FILE"
@@ -203,6 +218,7 @@ if [ "$do_tracking" = true ] ; then
     for ((dataset_number = 0; dataset_number < ${#RAW_FILES[@]}; dataset_number++)); do
         get_data_files
         for ((SKIP_TRIGGERS = 0; SKIP_TRIGGERS < dataset_size; SKIP_TRIGGERS += $NUMBER_OF_EVENTS)); do
+            echo -en "\rTracking Events $analysed_events/$tracking_events ..."
             FILE_NAME="3-${OUTPUT_NAME}_tracking_${counter}"
             OUTPUT_CONF="${OUTPUT_DIR}/${FILE_NAME}.conf"
             OUTPUT_FILE="${FILE_NAME}.root"
@@ -217,49 +233,64 @@ if [ "$do_tracking" = true ] ; then
         done
     done
     TRACKING_GEOMETRY_FILE="$GEOMETRY_FILE"
+    echo -en "\rTracking ($analysed_events Events) Done!\n"
 fi
 # ############################################## DUT ANALYSIS ############################################## #
 if [ "$do_dutanalysis" = true ] ; then
     DETECTORS=("ALPIDE_0" "ALPIDE_1" "ALPIDE_2" "ALPIDE_3" "ALPIDE_4" "ALPIDE_5")
+    SKIP_TRIGGERS=0
+    MIN_HITS_ON_TRACK=5
+    if [ $do_initialisation=true ]; then
+        SKIP_TRIGGERS=$((SKIP_TRIGGERS+initialisation_events))
+    fi
+    if [ $do_alignment=true ]; then
+        SKIP_TRIGGERS=$((SKIP_TRIGGERS+alignment_events*alignment_iterations))
+    fi
+    if [ $do_tracking=true ]; then
+        SKIP_TRIGGERS=$((SKIP_TRIGGERS+tracking_events))
+    fi
+
     for ((detector=0; detector<${#DETECTORS[@]}; detector++)); do
         detector_string="ALPIDE_$detector"
         if [ $detector -eq 1 ]; then
             echo "Skipping ALPIDE 1, as it is reference"
         else
+            echo -en "\rDUT Analysis of ALPIDE $detectos ..."
             FILE_NAME="4-${OUTPUT_NAME}_DUT_$((detector))"
-            # GEOMETRY_FILE="$TRACKING_GEOMETRY_FILE"
-            GEOMETRY_FILE="/home/alpide/Simon/marburg/geometry_templates.geo"
+            GEOMETRY_FILE="$TRACKING_GEOMETRY_FILE"
+            # GEOMETRY_FILE="/home/alpide/Simon/marburg/geometry_templates.geo"
             OUTPUT_CONF="${OUTPUT_DIR}/${FILE_NAME}.conf"
             TEMP_GEO="${OUTPUT_DIR}/${FILE_NAME}.geo"
             OUTPUT_FILE="${FILE_NAME}.root"
+            UPSTREAM_DETECTORS=""
+            DOWNSTREAM_DETECTORS=""
 
             echo "" > ${TEMP_GEO}
             for ((detector_n=0; detector_n<${#DETECTORS[@]}; detector_n++)); do
                 module="ALPIDE_$detector_n"
-                sed -n '/'"$module"'\]/,/\[/p' "/home/alpide/Simon/marburg/geometry_templates.geo" | sed '$d' >> ${TEMP_GEO}
+                # sed -n '/'"$module"'\]/,/\[/p' "/home/alpide/Simon/marburg/geometry_templates.geo" | sed '$d' >> ${TEMP_GEO}
+                sed -n '/'"$module"'\]/,/\[/p' "${GEOMETRY_FILE}" | sed '$d' >> ${TEMP_GEO}
                 if [ $module = $detector_string ]; then
-                    echo 'role = "dut"' >> ${TEMP_GEO}
+                    # echo 'role = "dut"' >> ${TEMP_GEO}
+                    sed -i '$s/.*/role = "dut"/' ${TEMP_GEO}
+                    echo "" >> $TEMP_GEO
+                else
+                    if [ $detector_n -lt 3 ]; then
+                        UPSTREAM_DETECTORS="$UPSTREAM_DETECTORS \"$module\""
+                    else
+                        DOWNSTREAM_DETECTORS="$DOWNSTREAM_DETECTORS \"$module\""
+                    fi
                 fi
             done
-
-            # for ((detector_geo=0; detector_geo<${#DETECTORS[@]}; detector_geo++)); do
-            #         echo "" > ${OUTPUT_GEO}
-            #     for ((module in "${geometry_dut[@]}")); do
-            #         sed -n '/'"$module"'\]/,/\[/p' /home/alpide/Simon/marburg/geometry_templates.conf | sed '$d' >> ${OUTPUT_GEO}
-            #         sed -n '/'"module
-            #     done
-
-
-            #     if [ $detector_geo -lt 3]; then
-            #         UPSTREAM_DETECTORS
-
 
             NUMBER_OF_EVENTS=$dutanalysis_events
             create_dut_conf
             exchange_placeholders
             execute
+            echo -en "\rDUT Analysis of ALPIDE $detector Done!\n"
         fi
     done
+    echo -en "\rDUT Analysis Done!\n"
 fi
 # ############################################## END ############################################## #
 
